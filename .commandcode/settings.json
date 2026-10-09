@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(sw_vers && xcodebuild -version 2>/dev/null; swift --version 2>/dev/null)",
+      "Shell(rm:*)",
+      "Shell(git:*)",
+      "Shell(cmake:*)",
+      "Shell(/usr/bin/perl:*)",
+      "Shell(cd \"$COMMANDCODE_SCRATCHPAD/mra\" && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release > /tmp/mra_cmake.log 2>&1; echo \"cmake exit=$?\"; cmake --build . -j8 > /tmp/mra_build.log 2>&1; echo \"build exit=$?\"; tail -20 /tmp/mra_build.log; echo \"=== ARTIFACTS ===\"; find . -maxdepth 2 -name \"*.framework\" -o -maxdepth 2 -name \"MediaRemoteAdapterTestClient\" | head)",
+      "Shell(cd \"$COMMANDCODE_SCRATCHPAD/mra\" && FW=$(realpath ./build/MediaRemoteAdapter.framework) && CLIENT=$(realpath ./build/MediaRemoteAdapterTestClient) && echo \"FW=$FW\" && echo \"=== get ===\" && /usr/bin/perl ./bin/mediaremote-adapter.pl \"$FW\" get; echo \"get exit=$?\"; echo \"=== test ===\" && /usr/bin/perl ./bin/mediaremote-adapter.pl \"$FW\" \"$CLIENT\" test; echo \"test exit=$?\")",
+      "Shell(mkdir:*)",
+      "Shell(cp:*)",
+      "Shell(lipo:*)",
+      "Shell(swift:*)",
+      "Shell(grep:*)",
+      "Shell(./scripts/build-app.sh:*)",
+      "Shell(codesign:*)",
+      "Shell(ps:*)",
+      "Shell(pgrep:*)",
+      "Shell(./dist/MacNotch.app/Contents/MacOS/MacNotch:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
