@@ -12,11 +12,13 @@ final class NotchViewModel: ObservableObject {
     enum Tab: String, CaseIterable, Identifiable {
         case music = "Music"
         case home = "Home"
+        case briefs = "Briefs"
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .music: return "music.note"
             case .home: return "house.fill"
+            case .briefs: return "square.grid.2x2.fill"
             }
         }
     }
@@ -52,12 +54,19 @@ final class NotchViewModel: ObservableObject {
         switch tab {
         case .music: height = notchSize.height + 196
         case .home: height = notchSize.height + 258
+        case .briefs: height = notchSize.height + 330
         }
         return CGSize(width: max(notchSize.width + 340, 560), height: height)
     }
 
     /// Largest open size, used to size the panel and the hover region.
-    var maxExpandedSize: CGSize { expandedSize(for: .home) }
+    var maxExpandedSize: CGSize {
+        let sizes = Tab.allCases.map { expandedSize(for: $0) }
+        return CGSize(
+            width: sizes.map(\.width).max() ?? expandedSize.width,
+            height: sizes.map(\.height).max() ?? expandedSize.height
+        )
+    }
 
     var currentSize: CGSize {
         switch visualState {

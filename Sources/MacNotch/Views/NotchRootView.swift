@@ -5,6 +5,7 @@ import SwiftUI
 struct NotchRootView: View {
     @ObservedObject var viewModel: NotchViewModel
     @ObservedObject var music: MusicManager
+    @ObservedObject var briefs: BriefsModel
 
     var body: some View {
         content
@@ -42,7 +43,7 @@ struct NotchRootView: View {
             PeekView(music: music, notchHeight: viewModel.notchSize.height)
                 .transition(.opacity)
         case .expanded:
-            ExpandedView(viewModel: viewModel, music: music)
+            ExpandedView(viewModel: viewModel, music: music, briefs: briefs)
                 .transition(.opacity)
         }
     }

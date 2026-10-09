@@ -5,6 +5,7 @@ import SwiftUI
 struct ExpandedView: View {
     @ObservedObject var viewModel: NotchViewModel
     @ObservedObject var music: MusicManager
+    @ObservedObject var briefs: BriefsModel
 
     private var notchHeight: CGFloat { viewModel.notchSize.height }
 
@@ -18,6 +19,7 @@ struct ExpandedView: View {
                 switch viewModel.tab {
                 case .music: MusicPlayerView(music: music)
                 case .home: HomeView(music: music, viewModel: viewModel)
+                case .briefs: BriefsView(model: briefs)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

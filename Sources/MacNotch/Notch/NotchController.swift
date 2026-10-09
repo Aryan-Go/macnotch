@@ -10,6 +10,7 @@ final class NotchController {
     private let hostingView: NSHostingView<NotchRootView>
     private let viewModel: NotchViewModel
     private let music: MusicManager
+    private let briefs: BriefsModel
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -20,8 +21,9 @@ final class NotchController {
     private var screen: NSScreen { NSScreen.notched ?? NSScreen.main ?? NSScreen.screens[0] }
     private var notchFrame: NSRect { screen.notchFrameWithFallback }
 
-    init(music: MusicManager) {
+    init(music: MusicManager, briefs: BriefsModel) {
         self.music = music
+        self.briefs = briefs
 
         let screen = NSScreen.notched ?? NSScreen.main ?? NSScreen.screens[0]
         let notch = screen.notchFrameWithFallback
@@ -37,7 +39,7 @@ final class NotchController {
         )
 
         self.panel = NotchPanel(contentRect: frame)
-        self.hostingView = NSHostingView(rootView: NotchRootView(viewModel: model, music: music))
+        self.hostingView = NSHostingView(rootView: NotchRootView(viewModel: model, music: music, briefs: briefs))
         hostingView.frame = NSRect(origin: .zero, size: panelSize)
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
@@ -58,7 +60,9 @@ final class NotchController {
             .sink { [weak self] state in
                 guard let self else { return }
                 self.panel.ignoresMouseEvents = (state != .expanded)
-                if state != .expanded {
+                if state == .expanded {
+                    self.briefs.refreshAll()
+                } else {
                     self.panel.resignKey()
                 }
             }

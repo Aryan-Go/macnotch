@@ -5,16 +5,19 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: NotchController?
     private let music = MusicManager()
+    private let briefs = BriefsModel()
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         music.start()
-        controller = NotchController(music: music)
+        briefs.start()
+        controller = NotchController(music: music, briefs: briefs)
         installStatusItem()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         music.stop()
+        briefs.stop()
     }
 
     private func installStatusItem() {

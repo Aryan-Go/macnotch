@@ -23,6 +23,9 @@ frameworks — just Swift Package Manager.
   that reports to the system Now Playing interface.
 - **Home tab.** Clock, date, battery ring, and quick actions for Dark Mode, Mute
   and Sleep.
+- **Briefs tab.** At-a-glance weather, your Stocks watchlist, and recent
+  notifications — read from the data the Weather, Stocks and Notification Center
+  apps already keep on your Mac.
 - **Menu bar item.** A small item to open the notch or quit.
 
 ---
@@ -103,6 +106,29 @@ publishes it to the UI. Controls are media-remote commands (`send`, `seek`).
   That is the call the system's own UI uses, and it brings up the real lock
   screen rather than just blanking the display.
 
+### 5. Briefs, from the apps you already have
+
+The Briefs tab has no third-party services and no API keys. Each of its three
+feeds reads data an Apple app has already put on this Mac:
+
+- **Weather** — `Modules/WeatherProvider.swift`. WeatherKit needs a paid
+  developer entitlement, and the Weather app's own on-disk cache is an
+  undocumented binary format. So the tab reuses the short-lived WeatherKit token
+  the Weather app and its widget keep in
+  `~/Library/Containers/com.apple.weather[.widget]/Data/Library/Preferences`, plus
+  a cached request URL from the Weather app's `Cache.db` (which already carries
+  the coordinates, timezone and client metadata the service expects). It then
+  calls Apple's own `weatherkit.apple.com` asking for JSON. If both stored tokens
+  have expired, the card tells you to open the Weather app once.
+- **Stocks** — `Modules/StocksProvider.swift`. The Stocks widget caches its
+  watchlist quotes as JSON under its container's `fsCachedData` directory. The
+  tab reads the most recent snapshot and shows the top few symbols. No network,
+  no permission.
+- **Notifications** — `Modules/NotificationsProvider.swift`. Reads the Notification
+  Center database under `group.com.apple.usernoted`. macOS guards that path with
+  Full Disk Access, so until it is granted the tab shows a button that opens the
+  right System Settings pane.
+
 ---
 
 ## Requirements
@@ -153,7 +179,6 @@ look for the music-note icon in the menu bar.
 ---
 
 ## Using it
-
 | Action | Result |
 | --- | --- |
 | Hover the notch | Shows the compact peek card |
@@ -163,6 +188,7 @@ look for the music-note icon in the menu bar.
 | Click outside the panel | Closes and unpins |
 | Music tab | Full player: art, progress, transport, volume |
 | Home tab | Clock, date, battery, Dark Mode / Mute / Lock |
+| Briefs tab | Weather, Stocks watchlist, recent notifications |
 | Menu bar music-note icon | Open the notch, or Quit MacNotch |
 
 ---
@@ -196,6 +222,20 @@ the cursor leaves.
 macOS asks for permission to control System Events. Approve it in
 **System Settings → Privacy & Security → Automation**.
 
+**Briefs shows "Grant Full Disk Access to see notifications".**
+Notification Center's database is protected. Open **System Settings → Privacy &
+Security → Full Disk Access**, enable MacNotch, then reopen the notch. If you run
+from source with `make run`, grant access to your terminal app instead.
+
+**Briefs shows "Open the Weather app once to refresh".**
+The tab borrows the Weather app's own WeatherKit token, and those tokens expire
+after a few weeks. Open the Weather app (or add its widget) once to mint a fresh
+one, then reopen the notch.
+
+**Stocks shows "Open the Stocks app once to cache quotes".**
+The quotes come from the Stocks widget's cache, which only fills after the Stocks
+app or widget has run at least once on this Mac.
+
 ---
 
 ## Project layout
@@ -211,9 +251,10 @@ Sources/MacNotch/
   AppDelegate.swift           Wiring + menu bar item
   Notch/                      Panel, screen geometry, shape, hover controller
   Media/                      MediaRemote adapter client, NowPlaying model, music manager
+  Modules/                    Briefs data sources: weather, stocks, notifications
   System/                     CoreAudio volume, battery / dark mode / lock
   State/                      NotchViewModel (visual state + sizes)
-  Views/                      SwiftUI: root, peek, expanded, music, home, components
+  Views/                      SwiftUI: root, peek, expanded, music, home, briefs, components
   Resources/                  Vendored MediaRemote helper + license
 ```
 
