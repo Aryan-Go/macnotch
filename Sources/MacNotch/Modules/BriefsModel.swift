@@ -74,6 +74,18 @@ struct NotificationItem: Identifiable, Equatable {
     static func == (lhs: NotificationItem, rhs: NotificationItem) -> Bool {
         lhs.id == rhs.id
     }
+
+    /// The fields to render, in order and without duplicates. The feed shows a
+    /// headline plus one extra line, so a Mail row can surface the sender *and*
+    /// the subject/message instead of collapsing to a single hidden field.
+    var displayLines: (headline: String, detail: String) {
+        let parts = [title, subtitle, body].filter { !$0.isEmpty }
+        var unique: [String] = []
+        for part in parts where !unique.contains(part) {
+            unique.append(part)
+        }
+        return (unique.first ?? "", unique.dropFirst().first ?? "")
+    }
 }
 
 /// State of the notifications feed.
@@ -95,11 +107,12 @@ final class BriefsModel: ObservableObject {
     @Published private(set) var notifications: NotificationsState = .loading
 
     private var timer: Timer?
+    private var activationObserver: NSObjectProtocol?
     private var lastWeatherFetch = Date.distantPast
     private var weatherInFlight = false
 
     private let maxStocks = 4
-    private let maxNotifications = 3
+    private let maxNotifications = 8
 
     // MARK: - Lifecycle
 
@@ -108,11 +121,24 @@ final class BriefsModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        // Coming back from System Settings is the moment a freshly granted Full
+        // Disk Access should take effect — re-read instead of waiting for the tick.
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshNotifications() }
+        }
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
     }
 
     /// Called when the panel opens so the tab is fresh the moment it appears.
@@ -181,6 +207,8 @@ final class BriefsModel: ObservableObject {
                         self.notifications = .permissionNeeded
                     }
                 case .failure(.unavailable):
+                    // A transient read hiccup shouldn't blank a feed we already have.
+                    if case .items = self.notifications { break }
                     self.notifications = .empty
                 }
             }

@@ -11,44 +11,84 @@ enum NotificationsError: Error {
 /// The database lives under `group.com.apple.usernoted`, which macOS protects
 /// with Full Disk Access. Without it the read fails and we surface a hint. Each
 /// row's payload is a binary plist carrying the title/subtitle/body.
+///
+/// Notifications keep landing while the app runs, so we read a consistent
+/// snapshot (see `SQLite`) rather than copying files by hand — a naive
+/// `db` + `-wal` copy can miss freshly delivered rows. Fetches are serialised so
+/// overlapping refreshes never fight over the snapshot.
 enum NotificationsProvider {
     private static let dbRelativePath =
         "Library/Group Containers/group.com.apple.usernoted/db2/db"
 
+    /// Absolute location of the Notification Center store.
+    static var databasePath: String { NSHomeDirectory() + "/" + dbRelativePath }
+
+    /// Whether the Full Disk Access grant is actually in effect for this process.
+    /// macOS has no API to query the grant, so we probe the protected file — the
+    /// same thing `fetch()` does. Handy for showing the real state in the menu
+    /// instead of guessing.
+    static var hasAccess: Bool {
+        FileManager.default.isReadableFile(atPath: databasePath)
+    }
+
+    private static let queue = DispatchQueue(label: "com.macnotch.notifications.fetch")
+
     static func fetch() -> Result<[NotificationItem], NotificationsError> {
-        let source = NSHomeDirectory() + "/" + dbRelativePath
+        queue.sync { fetchLocked() }
+    }
+
+    private static func fetchLocked() -> Result<[NotificationItem], NotificationsError> {
+        let source = databasePath
         let manager = FileManager.default
 
         guard manager.fileExists(atPath: source) else { return .failure(.unavailable) }
         guard manager.isReadableFile(atPath: source) else { return .failure(.permissionNeeded) }
 
-        // Query a private copy so we never fight the live database's WAL locks.
-        guard let working = copyDatabase(source: source) else {
+        guard let snapshot = SQLite.snapshot(source: source) else {
             return .failure(.permissionNeeded)
         }
-        defer { try? manager.removeItem(at: working.directory) }
+        defer { try? manager.removeItem(at: snapshot) }
 
-        guard let schema = columnNames(in: working.path) else { return .failure(.unavailable) }
-        guard schema.contains("data"), schema.contains("delivered_date") else {
+        guard let columns = columnTypes(in: snapshot.path),
+              columns["data"] != nil else {
             return .failure(.unavailable)
         }
 
+        let hasRecID = columns["rec_id"] != nil
+        let recIDIsInteger = (columns["rec_id"] ?? "").uppercased().contains("INT")
+        let hasDate = columns["delivered_date"] != nil
+
         let select = [
-            schema.contains("rec_id") ? "rec_id" : "NULL",
+            hasRecID ? "rec_id" : "NULL",
             "hex(data)",
-            schema.contains("app_id") ? "app_id" : "''",
-            "delivered_date"
+            columns["app_id"] != nil ? "app_id" : "''",
+            hasDate ? "delivered_date" : "NULL"
         ].joined(separator: ", ")
+
+        // Most-recent-first. `rec_id` is the store's insertion rowid, so it keeps
+        // ordering correctly even for the freshest rows that carry no
+        // delivered_date — the previous date-only ordering silently hid those.
+        let order: String
+        switch (recIDIsInteger, hasDate) {
+        case (true, true): order = "rec_id DESC, delivered_date DESC"
+        case (true, false): order = "rec_id DESC"
+        case (false, true): order = "delivered_date DESC"
+        case (false, false): order = "rowid DESC"
+        }
 
         let query = """
         SELECT \(select) FROM record \
-        WHERE data IS NOT NULL AND delivered_date IS NOT NULL \
-        ORDER BY delivered_date DESC LIMIT 30;
+        WHERE data IS NOT NULL \
+        ORDER BY \(order) LIMIT 40;
         """
 
-        guard let output = runSQLite(path: working.path, query: query, separator: "|") else {
+        guard let output = SQLite.run(path: snapshot.path, query: query) else {
             return .failure(.unavailable)
         }
+
+        // `app_id` is an integer key into the `app` table, so resolve bundle ids
+        // from there when a payload doesn't carry one of its own.
+        let appIdentifiers = identifierMap(in: snapshot.path)
 
         var items: [NotificationItem] = []
         for line in output.split(separator: "\n") {
@@ -57,28 +97,36 @@ enum NotificationsProvider {
             let hex = String(fields[1])
             guard !hex.isEmpty, let data = data(fromHex: hex), !data.isEmpty else { continue }
 
-            let bundleID = String(fields[2])
-            let delivered = Double(fields[3]) ?? 0
+            let delivered = Double(fields[3])
             let key = String(fields[0])
 
             guard let payload = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
                 continue
             }
 
-            let title = firstString(payload, ["tit", "title"]) ?? ""
-            let subtitle = firstString(payload, ["sub", "subtitle"]) ?? ""
-            let body = firstString(payload, ["body", "message"]) ?? ""
-            if title.isEmpty && body.isEmpty { continue }
+            // The visible text lives in the request dictionary ("req"), not at the
+            // top level of the payload: `titl`/`subt`/`body`.
+            let request = payload["req"] as? [String: Any] ?? payload
+            let title = text(in: request, keys: ["titl", "tit", "title"]) ?? ""
+            let subtitle = text(in: request, keys: ["subt", "sub", "subtitle"]) ?? ""
+            let body = text(in: request, keys: ["body", "message"]) ?? ""
+            if title.isEmpty && subtitle.isEmpty && body.isEmpty { continue }
 
+            let bundleID = (payload["app"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                ?? Int(fields[2]).flatMap { appIdentifiers[$0] }
+                ?? ""
+
+            let stamp = (payload["date"] as? Double) ?? (request["date"] as? Double) ?? delivered
+            let date = stamp.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date()
             let app = appInfo(for: bundleID)
             items.append(NotificationItem(
-                id: key + hex.prefix(16),
+                id: "\(key)-\(hex.prefix(12))",
                 title: title,
                 subtitle: subtitle,
                 body: body,
                 appName: app.name,
                 bundleID: bundleID,
-                date: Date(timeIntervalSinceReferenceDate: delivered),
+                date: date,
                 icon: app.icon
             ))
         }
@@ -86,70 +134,66 @@ enum NotificationsProvider {
         return .success(items)
     }
 
-    // MARK: - Database helpers
-
-    private static func copyDatabase(source: String) -> (directory: URL, path: String)? {
-        let manager = FileManager.default
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("macnotch-usernoted-\(ProcessInfo.processInfo.processIdentifier)")
-        try? manager.removeItem(at: directory)
-        guard (try? manager.createDirectory(at: directory, withIntermediateDirectories: true)) != nil else {
+    private static func columnTypes(in path: String) -> [String: String]? {
+        guard let output = SQLite.run(path: path, query: "PRAGMA table_info(record);") else {
             return nil
         }
-
-        let base = URL(fileURLWithPath: source)
-        var copied = false
-        for suffix in ["", "-wal", "-shm"] {
-            let from = URL(fileURLWithPath: source + suffix)
-            guard manager.fileExists(atPath: from.path) else { continue }
-            let to = directory.appendingPathComponent(base.lastPathComponent + suffix)
-            guard (try? manager.copyItem(at: from, to: to)) != nil else {
-                if suffix.isEmpty { return nil }
-                continue
-            }
-            if suffix.isEmpty { copied = true }
-        }
-        guard copied else { return nil }
-        return (directory, directory.appendingPathComponent(base.lastPathComponent).path)
-    }
-
-    private static func columnNames(in path: String) -> Set<String>? {
-        guard let output = runSQLite(path: path, query: "PRAGMA table_info(record);", separator: "|") else {
-            return nil
-        }
-        var names = Set<String>()
+        var columns: [String: String] = [:]
         for line in output.split(separator: "\n") {
             let fields = line.split(separator: "|", omittingEmptySubsequences: false)
-            if fields.count >= 2 { names.insert(String(fields[1])) }
+            if fields.count >= 3 {
+                columns[String(fields[1])] = String(fields[2])
+            }
         }
-        return names.isEmpty ? nil : names
+        return columns.isEmpty ? nil : columns
     }
 
-    private static func runSQLite(path: String, query: String, separator: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        process.arguments = ["-noheader", "-separator", separator, path, query]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
+    /// The `app` table maps the integer `app_id` on each record to a bundle id.
+    private static func identifierMap(in path: String) -> [Int: String] {
+        guard let output = SQLite.run(path: path, query: "SELECT app_id, identifier FROM app;") else {
+            return [:]
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: data, encoding: .utf8)
+        var map: [Int: String] = [:]
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: "|", omittingEmptySubsequences: false)
+            guard fields.count >= 2, let id = Int(fields[0]), !fields[1].isEmpty else { continue }
+            map[id] = String(fields[1])
+        }
+        return map
     }
 
     // MARK: - Payload helpers
 
-    private static func firstString(_ dict: [String: Any], _ keys: [String]) -> String? {
+    /// The first non-empty value among `keys`, flattened to displayable text.
+    private static func text(in dict: [String: Any], keys: [String]) -> String? {
         for key in keys {
-            if let value = dict[key] as? String, !value.isEmpty { return value }
+            if let value = flatten(dict[key]) { return value }
         }
         return nil
+    }
+
+    /// Notification text is not always a plain string. Modern macOS stores many
+    /// request fields as localized-string arrays (`[format, fallback, [args]]`),
+    /// and occasionally as raw data or a small dictionary. Reading them with
+    /// `as? String` alone silently dropped those entries — which is why whole
+    /// apps (Mail among them) never showed up in the feed.
+    private static func flatten(_ value: Any?) -> String? {
+        switch value {
+        case let string as String:
+            return string.isEmpty ? nil : string
+        case let list as [Any]:
+            for item in list {
+                if let string = flatten(item) { return string }
+            }
+            return nil
+        case let data as Data:
+            guard let string = String(data: data, encoding: .utf8), !string.isEmpty else { return nil }
+            return string
+        case let dictionary as [String: Any]:
+            return flatten(dictionary["key"]) ?? flatten(dictionary["ident"])
+        default:
+            return nil
+        }
     }
 
     private static func data(fromHex hex: String) -> Data? {

@@ -6,6 +6,8 @@ struct NotchRootView: View {
     @ObservedObject var viewModel: NotchViewModel
     @ObservedObject var music: MusicManager
     @ObservedObject var briefs: BriefsModel
+    @ObservedObject var calls: CallManager
+    @ObservedObject var whatsapp: WhatsAppModel
 
     var body: some View {
         content
@@ -35,16 +37,26 @@ struct NotchRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch viewModel.visualState {
-        case .hidden:
-            HiddenNotchView()
-                .opacity(0)
-        case .peek:
-            PeekView(music: music, notchHeight: viewModel.notchSize.height)
-                .transition(.opacity)
-        case .expanded:
-            ExpandedView(viewModel: viewModel, music: music, briefs: briefs)
-                .transition(.opacity)
+        if let call = viewModel.activeCall {
+            CallCardView(
+                call: call,
+                notchHeight: viewModel.notchSize.height,
+                onAccept: { calls.accept() },
+                onDecline: { calls.decline() }
+            )
+            .transition(.opacity)
+        } else {
+            switch viewModel.visualState {
+            case .hidden:
+                HiddenNotchView()
+                    .opacity(0)
+            case .peek:
+                PeekView(music: music, notchHeight: viewModel.notchSize.height)
+                    .transition(.opacity)
+            case .expanded:
+                ExpandedView(viewModel: viewModel, music: music, briefs: briefs, whatsapp: whatsapp)
+                    .transition(.opacity)
+            }
         }
     }
 }

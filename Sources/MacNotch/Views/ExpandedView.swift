@@ -6,6 +6,7 @@ struct ExpandedView: View {
     @ObservedObject var viewModel: NotchViewModel
     @ObservedObject var music: MusicManager
     @ObservedObject var briefs: BriefsModel
+    @ObservedObject var whatsapp: WhatsAppModel
 
     private var notchHeight: CGFloat { viewModel.notchSize.height }
 
@@ -20,6 +21,7 @@ struct ExpandedView: View {
                 case .music: MusicPlayerView(music: music)
                 case .home: HomeView(music: music, viewModel: viewModel)
                 case .briefs: BriefsView(model: briefs)
+                case .whatsapp: WhatsAppView(model: whatsapp)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

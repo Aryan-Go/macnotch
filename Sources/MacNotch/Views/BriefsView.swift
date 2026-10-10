@@ -125,7 +125,10 @@ struct BriefsView: View {
     private var notificationsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionHeader("Notifications", systemName: "bell.badge.fill")
-            notificationsBody
+            ScrollView(.vertical, showsIndicators: false) {
+                notificationsBody
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -143,9 +146,15 @@ struct BriefsView: View {
                 Image(systemName: "lock.shield")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.6))
-                Text("Grant Full Disk Access to see notifications")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.6))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Grant Full Disk Access to see notifications")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Text("Already enabled? Remove and re-add MacNotch, then reopen")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.38))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Spacer(minLength: 8)
                 Button("Open Settings") {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
@@ -171,7 +180,8 @@ struct BriefsView: View {
     }
 
     private func notificationRow(_ item: NotificationItem) -> some View {
-        HStack(spacing: 10) {
+        let lines = item.displayLines
+        return HStack(spacing: 10) {
             Group {
                 if let icon = item.icon {
                     Image(nsImage: icon)
@@ -194,10 +204,18 @@ struct BriefsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.35))
                 }
-                Text(item.title.isEmpty ? item.body : item.title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .lineLimit(1)
+                if !lines.headline.isEmpty {
+                    Text(lines.headline)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
+                if !lines.detail.isEmpty {
+                    Text(lines.detail)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                }
             }
 
             Spacer(minLength: 0)

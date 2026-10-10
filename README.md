@@ -83,8 +83,14 @@ macOS asks for permission to control your Mac. Approve it in
 **System Settings → Privacy & Security → Automation**.
 
 **Briefs shows "Grant Full Disk Access to see notifications".**
-Open **System Settings → Privacy & Security → Full Disk Access**, enable MacNotch,
-then reopen the notch.
+Open **System Settings → Privacy & Security → Full Disk Access** and enable MacNotch.
+If MacNotch is *already* listed and switched on but the notch still asks, the stored
+grant is stale: macOS ties each entry to the *exact* build it was approved for, so a
+gently different build leaves the toggle on while reads are silently denied (you'll
+see `Failed to match existing code requirement for subject com.macnotch.app` in
+`log show --predicate 'process == "tccd"'`). Remove MacNotch with the **−** button,
+add it back with **+**, then quit and reopen the app. Builds made with `make app` /
+`make install` carry a stable signature, so the re-added grant survives later rebuilds.
 
 **Briefs shows "Open the Weather app once to refresh".**
 Open the Weather app (or add its widget) once to refresh the data, then reopen the

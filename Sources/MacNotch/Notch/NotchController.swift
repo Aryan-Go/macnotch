@@ -11,6 +11,8 @@ final class NotchController {
     private let viewModel: NotchViewModel
     private let music: MusicManager
     private let briefs: BriefsModel
+    private let calls: CallManager
+    private let whatsapp: WhatsAppModel
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -21,9 +23,11 @@ final class NotchController {
     private var screen: NSScreen { NSScreen.notched ?? NSScreen.main ?? NSScreen.screens[0] }
     private var notchFrame: NSRect { screen.notchFrameWithFallback }
 
-    init(music: MusicManager, briefs: BriefsModel) {
+    init(music: MusicManager, briefs: BriefsModel, calls: CallManager, whatsapp: WhatsAppModel) {
         self.music = music
         self.briefs = briefs
+        self.calls = calls
+        self.whatsapp = whatsapp
 
         let screen = NSScreen.notched ?? NSScreen.main ?? NSScreen.screens[0]
         let notch = screen.notchFrameWithFallback
@@ -39,7 +43,13 @@ final class NotchController {
         )
 
         self.panel = NotchPanel(contentRect: frame)
-        self.hostingView = NSHostingView(rootView: NotchRootView(viewModel: model, music: music, briefs: briefs))
+        self.hostingView = NSHostingView(rootView: NotchRootView(
+            viewModel: model,
+            music: music,
+            briefs: briefs,
+            calls: calls,
+            whatsapp: whatsapp
+        ))
         hostingView.frame = NSRect(origin: .zero, size: panelSize)
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
@@ -48,6 +58,8 @@ final class NotchController {
 
         observeState()
         observeMusic()
+        observeCalls()
+        observeKeyboardFocus()
         installMonitors()
         observeScreenChanges()
     }
@@ -83,6 +95,38 @@ final class NotchController {
                 if !isFirstEvent, !now.isEmpty, self.viewModel.visualState == .hidden {
                     self.showPeek()
                 }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// While a call is ringing, take over the panel and keep it open so the user
+    /// can answer without chasing the system banner.
+    private func observeCalls() {
+        calls.$call
+            .receive(on: RunLoop.main)
+            .sink { [weak self] call in
+                guard let self else { return }
+                self.viewModel.activeCall = call
+                if call != nil {
+                    self.viewModel.isPinned = true
+                    self.viewModel.expand()
+                } else {
+                    self.viewModel.isPinned = false
+                    self.viewModel.collapse()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// The reply composer needs a real key window to accept typing. Only claim
+    /// it when the WhatsApp tab is actually open.
+    private func observeKeyboardFocus() {
+        viewModel.$tab
+            .combineLatest(viewModel.$visualState)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] tab, state in
+                guard let self, tab == .whatsapp, state == .expanded else { return }
+                self.panel.makeKeyAndOrderFront(nil)
             }
             .store(in: &cancellables)
     }
@@ -182,6 +226,9 @@ final class NotchController {
     }
 
     private func handleMouse(at location: NSPoint, type: NSEvent.EventType) {
+        // A ringing call owns the panel; hover/click-away must not dismiss it.
+        if viewModel.isCallActive { return }
+
         let onNotch = hoverRect.contains(location)
         let onPeekCard = peekRect.contains(location)
 

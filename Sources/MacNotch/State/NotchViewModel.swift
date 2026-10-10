@@ -13,12 +13,14 @@ final class NotchViewModel: ObservableObject {
         case music = "Music"
         case home = "Home"
         case briefs = "Briefs"
+        case whatsapp = "WhatsApp"
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .music: return "music.note"
             case .home: return "house.fill"
             case .briefs: return "square.grid.2x2.fill"
+            case .whatsapp: return "message.fill"
             }
         }
     }
@@ -26,6 +28,10 @@ final class NotchViewModel: ObservableObject {
     @Published var visualState: VisualState = .hidden
     @Published var tab: Tab = .music
     @Published var isPinned = false
+
+    /// Set by the controller while a call is ringing; takes over the panel.
+    @Published var activeCall: IncomingCall?
+    var isCallActive: Bool { activeCall != nil }
 
     let notchSize: NSSize
 
@@ -48,6 +54,11 @@ final class NotchViewModel: ObservableObject {
 
     var expandedSize: CGSize { expandedSize(for: tab) }
 
+    /// Size of the incoming-call takeover card.
+    var callSize: CGSize {
+        CGSize(width: max(notchSize.width + 340, 520), height: notchSize.height + 96)
+    }
+
     /// Each module needs a different amount of vertical room.
     func expandedSize(for tab: Tab) -> CGSize {
         let height: CGFloat
@@ -55,13 +66,14 @@ final class NotchViewModel: ObservableObject {
         case .music: height = notchSize.height + 196
         case .home: height = notchSize.height + 258
         case .briefs: height = notchSize.height + 330
+        case .whatsapp: height = notchSize.height + 320
         }
         return CGSize(width: max(notchSize.width + 340, 560), height: height)
     }
 
     /// Largest open size, used to size the panel and the hover region.
     var maxExpandedSize: CGSize {
-        let sizes = Tab.allCases.map { expandedSize(for: $0) }
+        let sizes = Tab.allCases.map { expandedSize(for: $0) } + [callSize]
         return CGSize(
             width: sizes.map(\.width).max() ?? expandedSize.width,
             height: sizes.map(\.height).max() ?? expandedSize.height
@@ -69,6 +81,7 @@ final class NotchViewModel: ObservableObject {
     }
 
     var currentSize: CGSize {
+        if isCallActive { return callSize }
         switch visualState {
         case .hidden: return collapsedSize
         case .peek: return peekSize
@@ -82,10 +95,11 @@ final class NotchViewModel: ObservableObject {
     }
 
     var topCornerRadius: CGFloat {
-        visualState == .hidden ? 4 : 8
+        visualState == .hidden && !isCallActive ? 4 : 8
     }
 
     var bottomCornerRadius: CGFloat {
+        if isCallActive { return 24 }
         switch visualState {
         case .hidden: return 10
         case .peek: return 20
