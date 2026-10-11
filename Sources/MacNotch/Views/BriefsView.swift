@@ -125,7 +125,7 @@ struct BriefsView: View {
     private var notificationsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionHeader("Notifications", systemName: "bell.badge.fill")
-            ScrollView(.vertical, showsIndicators: false) {
+            ScrollView(.vertical, showsIndicators: true) {
                 notificationsBody
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

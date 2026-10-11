@@ -31,6 +31,25 @@ enum NotificationsProvider {
         FileManager.default.isReadableFile(atPath: databasePath)
     }
 
+    /// Cheap fingerprint of the store files (size + mtime, plus the access state).
+    /// Snapshotting the whole database is expensive, so callers poll this first
+    /// and only `fetch()` when it actually changed — that is what lets us look
+    /// often enough to catch short-lived notifications without constant I/O.
+    static func signature() -> String? {
+        let manager = FileManager.default
+        guard manager.isReadableFile(atPath: databasePath) else { return nil }
+        var parts = ["access"]
+        for suffix in ["", "-wal", "-shm"] {
+            guard let attributes = try? manager.attributesOfItem(atPath: databasePath + suffix) else {
+                continue
+            }
+            let size = (attributes[.size] as? NSNumber)?.int64Value ?? -1
+            let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+            parts.append("\(suffix):\(size):\(modified)")
+        }
+        return parts.joined(separator: "|")
+    }
+
     private static let queue = DispatchQueue(label: "com.macnotch.notifications.fetch")
 
     static func fetch() -> Result<[NotificationItem], NotificationsError> {
@@ -76,10 +95,13 @@ enum NotificationsProvider {
         case (false, false): order = "rowid DESC"
         }
 
+        // Pull well past what we display: the store keeps a sliding window, and
+        // rows whose text fails to parse still consume slots, so a shallow limit
+        // let recent-but-unparseable rows crowd out later ones.
         let query = """
         SELECT \(select) FROM record \
         WHERE data IS NOT NULL \
-        ORDER BY \(order) LIMIT 40;
+        ORDER BY \(order) LIMIT 200;
         """
 
         guard let output = SQLite.run(path: snapshot.path, query: query) else {

@@ -107,12 +107,22 @@ final class BriefsModel: ObservableObject {
     @Published private(set) var notifications: NotificationsState = .loading
 
     private var timer: Timer?
+    private var notificationsTimer: Timer?
     private var activationObserver: NSObjectProtocol?
     private var lastWeatherFetch = Date.distantPast
     private var weatherInFlight = false
 
+    /// Everything we've shown this session, newest first. The system store is a
+    /// short-lived, pruned window that can drop a notification within seconds of
+    /// delivery, so we keep what we've already read instead of letting the feed
+    /// shrink back to whatever still happens to be in the database.
+    private var seenNotifications: [NotificationItem] = []
+    private var notifySignature: String?
+
     private let maxStocks = 4
-    private let maxNotifications = 8
+    private let maxNotifications = 30
+    private let maxRetainedNotifications = 40
+    private let notificationRefreshInterval: TimeInterval = 4
 
     // MARK: - Lifecycle
 
@@ -120,6 +130,12 @@ final class BriefsModel: ObservableObject {
         refreshAll()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
+        }
+        // Notifications are looked at far more often than weather/stocks, but the
+        // expensive read is skipped unless the store actually changed (see
+        // `refreshNotifications`), so a short interval stays cheap.
+        notificationsTimer = Timer.scheduledTimer(withTimeInterval: notificationRefreshInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshNotifications() }
         }
         // Coming back from System Settings is the moment a freshly granted Full
         // Disk Access should take effect — re-read instead of waiting for the tick.
@@ -135,6 +151,8 @@ final class BriefsModel: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        notificationsTimer?.invalidate()
+        notificationsTimer = nil
         if let activationObserver {
             NotificationCenter.default.removeObserver(activationObserver)
             self.activationObserver = nil
@@ -195,23 +213,39 @@ final class BriefsModel: ObservableObject {
     // MARK: - Notifications
 
     private func refreshNotifications() {
+        // Skip the snapshot entirely when the store hasn't changed — a nil
+        // signature means Full Disk Access isn't in effect, so we still fetch to
+        // surface the permission hint (and to notice access being granted).
+        let signature = NotificationsProvider.signature()
+        if let signature, signature == notifySignature { return }
+        notifySignature = signature
+
         Task.detached(priority: .utility) {
             let result = NotificationsProvider.fetch()
-            await MainActor.run {
-                switch result {
-                case .success(let items):
-                    let trimmed = Array(items.prefix(self.maxNotifications))
-                    self.notifications = trimmed.isEmpty ? .empty : .items(trimmed)
-                case .failure(.permissionNeeded):
-                    if case .items = self.notifications {} else {
-                        self.notifications = .permissionNeeded
-                    }
-                case .failure(.unavailable):
-                    // A transient read hiccup shouldn't blank a feed we already have.
-                    if case .items = self.notifications { break }
-                    self.notifications = .empty
-                }
+            await MainActor.run { self.applyNotifications(result) }
+        }
+    }
+
+    /// Merges a fresh read with everything we've already shown. New rows come
+    /// first (they're newest-first already); entries the system store has since
+    /// dropped are kept behind them so the feed only ever grows.
+    private func applyNotifications(_ result: Result<[NotificationItem], NotificationsError>) {
+        switch result {
+        case .success(let items):
+            let fresh = Set(items.map(\.id))
+            let retained = seenNotifications.filter { !fresh.contains($0.id) }
+            seenNotifications = Array((items + retained).prefix(maxRetainedNotifications))
+            notifications = seenNotifications.isEmpty
+                ? .empty
+                : .items(Array(seenNotifications.prefix(maxNotifications)))
+        case .failure(.permissionNeeded):
+            if case .items = notifications {} else {
+                notifications = .permissionNeeded
             }
+        case .failure(.unavailable):
+            // A transient read hiccup shouldn't blank a feed we already have.
+            if case .items = notifications { break }
+            notifications = .empty
         }
     }
 }
